@@ -8,7 +8,7 @@ from dataclasses import is_dataclass
 from pathlib import Path
 
 from benchmarl.algorithms.common import AlgorithmConfig
-from benchmarl.environments import task_config_registry, TaskClass
+from benchmarl.environments import Task, task_config_registry
 from benchmarl.environments.common import _type_check_task_config
 from benchmarl.experiment import Experiment, ExperimentConfig
 from benchmarl.models import model_config_registry
@@ -19,15 +19,6 @@ _has_hydra = importlib.util.find_spec("hydra") is not None
 if _has_hydra:
     from hydra import compose, initialize, initialize_config_dir
     from omegaconf import DictConfig, OmegaConf
-
-
-class _HydraMissingMetadataError(FileNotFoundError):
-    def __init__(
-        self,
-        message=".hydra folder not found (should be max 3 levels above checkpoint file",
-    ):
-        self.message = message
-        super().__init__(self.message)
 
 
 def load_experiment_from_hydra(
@@ -60,7 +51,7 @@ def load_experiment_from_hydra(
     )
 
 
-def load_task_config_from_hydra(cfg: DictConfig, task_name: str) -> TaskClass:
+def load_task_config_from_hydra(cfg: DictConfig, task_name: str) -> Task:
     """Returns a :class:`~benchmarl.environments.Task` from hydra config.
 
     Args:
@@ -78,7 +69,7 @@ def load_task_config_from_hydra(cfg: DictConfig, task_name: str) -> TaskClass:
     cfg_dict_checked = _type_check_task_config(
         environment_name, inner_task_name, cfg_dict_checked
     )  # Only needed for the warning
-    return task_config_registry[task_name].get_task(cfg_dict_checked)
+    return task_config_registry[task_name].update_config(cfg_dict_checked)
 
 
 def load_experiment_config_from_hydra(cfg: DictConfig) -> ExperimentConfig:
@@ -142,7 +133,9 @@ def _find_hydra_folder(restore_file: str) -> str:
         if hydra_dir.exists() and hydra_dir.is_dir():
             return str(hydra_dir)
         current_folder = current_folder.parent
-    raise _HydraMissingMetadataError()
+    raise ValueError(
+        ".hydra folder not found (should be max 3 levels above checkpoint file"
+    )
 
 
 def reload_experiment_from_file(restore_file: str) -> Experiment:
@@ -155,12 +148,7 @@ def reload_experiment_from_file(restore_file: str) -> Experiment:
         restore_file (str): The checkpoint file of the experiment reload.
 
     """
-    try:
-        hydra_folder = _find_hydra_folder(restore_file)
-    except _HydraMissingMetadataError:
-        # Hydra was not used
-        return Experiment.reload_from_file(restore_file)
-
+    hydra_folder = _find_hydra_folder(restore_file)
     with initialize(
         version_base=None,
         config_path="conf",

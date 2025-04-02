@@ -76,12 +76,12 @@ class Mappo(Algorithm):
     #############################
 
     def _get_loss(
-        self, group: str, policy_for_loss: TensorDictModule, continuous: bool
+        self, group: str, policy_for_loss: TensorDictModule, continuous: bool, n_agents: int = None
     ) -> Tuple[LossModule, bool]:
         # Loss
         loss_module = ClipPPOLoss(
             actor=policy_for_loss,
-            critic=self.get_critic(group),
+            critic=self.get_critic(group, n_agents=n_agents),
             clip_epsilon=self.clip_epsilon,
             entropy_coef=self.entropy_coef,
             critic_coef=self.critic_coef,
@@ -271,8 +271,9 @@ class Mappo(Algorithm):
     # Custom new methods
     #####################
 
-    def get_critic(self, group: str) -> TensorDictModule:
-        n_agents = len(self.group_map[group])
+    def get_critic(self, group: str, n_agents: int = None) -> TensorDictModule:
+        if n_agents is None:
+            n_agents = len(self.group_map[group])
         if self.share_param_critic:
             critic_output_spec = Composite({"state_value": Unbounded(shape=(1,))})
         else:

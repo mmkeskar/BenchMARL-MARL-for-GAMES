@@ -6,6 +6,7 @@
 
 import collections
 import importlib
+import importlib.util
 import json
 from os import walk
 from pathlib import Path
@@ -209,7 +210,7 @@ class Plotting:
 
 if __name__ == "__main__":
     raw_dict = get_raw_dict_from_multirun_folder(
-        multirun_folder="/Users/matbet/PycharmProjects/BenchMARL/benchmarl/multirun/2023-09-22/17-21-34"
+        multirun_folder="checkpoints/gnn_exp_3_agents_3_adversaries/mappo_simple_tag_pos_gnn_from_pos_r10"
     )
     processed_data = Plotting.process_data(raw_dict)
     (
@@ -228,6 +229,6 @@ if __name__ == "__main__":
     )
 
     Plotting.task_sample_efficiency_curves(
-        processed_data=processed_data, env="vmas", task="navigation"
+        processed_data=processed_data, env="vmas", task="simple_tag_pos"
     )
     plt.show()

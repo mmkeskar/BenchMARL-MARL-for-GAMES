@@ -1,0 +1,112 @@
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 1.0 [1.0, 1.0] \\
+Mean & 1.0 [1.0, 1.0] \\
+Median & 1.0 [1.0, 1.0] \\
+Optimality Gap & 0.0 [0.0, 0.0] \\
+\end{tabular}
+
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 1.0 [1.0, 1.0] \\
+Mean & 1.0 [1.0, 1.0] \\
+Median & 1.0 [1.0, 1.0] \\
+Optimality Gap & 0.0 [0.0, 0.0] \\
+\end{tabular}
+
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 1.0 [1.0, 1.0] \\
+Mean & 1.0 [1.0, 1.0] \\
+Median & 1.0 [1.0, 1.0] \\
+Optimality Gap & 0.0 [0.0, 0.0] \\
+\end{tabular}
+
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 1.0 [1.0, 1.0] \\
+Mean & 1.0 [1.0, 1.0] \\
+Median & 1.0 [1.0, 1.0] \\
+Optimality Gap & 0.0 [0.0, 0.0] \\
+\end{tabular}
+
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 1.0 [1.0, 1.0] \\
+Mean & 1.0 [1.0, 1.0] \\
+Median & 1.0 [1.0, 1.0] \\
+Optimality Gap & 0.0 [0.0, 0.0] \\
+\end{tabular}
+
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 1.0 [1.0, 1.0] \\
+Mean & 1.0 [1.0, 1.0] \\
+Median & 1.0 [1.0, 1.0] \\
+Optimality Gap & 0.0 [0.0, 0.0] \\
+\end{tabular}
+
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 1.0 [1.0, 1.0] \\
+Mean & 1.0 [1.0, 1.0] \\
+Median & 1.0 [1.0, 1.0] \\
+Optimality Gap & 0.0 [0.0, 0.0] \\
+\end{tabular}
+
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 0.5 [0.5, 0.5] \\
+Mean & 0.5 [0.5, 0.5] \\
+Median & 0.5 [0.5, 0.5] \\
+Optimality Gap & 0.5 [0.5, 0.5] \\
+\end{tabular}
+
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 0.0 [0.0, 0.0] \\
+Mean & 0.0 [0.0, 0.0] \\
+Median & 0.0 [0.0, 0.0] \\
+Optimality Gap & 1.0 [1.0, 1.0] \\
+\end{tabular}
+
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 0.0 [0.0, 0.0] \\
+Mean & 0.0 [0.0, 0.0] \\
+Median & 0.0 [0.0, 0.0] \\
+Optimality Gap & 1.0 [1.0, 1.0] \\
+\end{tabular}
+
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 0.0 [0.0, 0.0] \\
+Mean & 0.0 [0.0, 0.0] \\
+Median & 0.0 [0.0, 0.0] \\
+Optimality Gap & 1.0 [1.0, 1.0] \\
+\end{tabular}
+
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 1.0 [1.0, 1.0] \\
+Mean & 1.0 [1.0, 1.0] \\
+Median & 1.0 [1.0, 1.0] \\
+Optimality Gap & 0.0 [0.0, 0.0] \\
+\end{tabular}
+
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 1.0 [1.0, 1.0] \\
+Mean & 1.0 [1.0, 1.0] \\
+Median & 1.0 [1.0, 1.0] \\
+Optimality Gap & 0.0 [0.0, 0.0] \\
+\end{tabular}
+
+\begin{tabular}{ll}
+ & MAPPO \\
+IQM & 1.0 [1.0, 1.0] \\
+Mean & 1.0 [1.0, 1.0] \\
+Median & 1.0 [1.0, 1.0] \\
+Optimality Gap & 0.0 [0.0, 0.0] \\
+\end{tabular}
+

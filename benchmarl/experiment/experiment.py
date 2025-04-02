@@ -10,41 +10,28 @@ import copy
 import importlib
 
 import os
-import pickle
-import shutil
 import time
-import warnings
 from collections import deque, OrderedDict
 from dataclasses import dataclass, MISSING
 from pathlib import Path
-
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import torch
 from tensordict import TensorDictBase
 from tensordict.nn import TensorDictSequential
 from torchrl.collectors import SyncDataCollector
-
-from torchrl.envs import ParallelEnv, SerialEnv, TransformedEnv
+from torchrl.envs import SerialEnv, TransformedEnv
 from torchrl.envs.transforms import Compose
 from torchrl.envs.utils import ExplorationType, set_exploration_type, step_mdp
 from torchrl.record.loggers import generate_exp_name
 from tqdm import tqdm
 
-from benchmarl.algorithms import IppoConfig, MappoConfig
-
 from benchmarl.algorithms.common import AlgorithmConfig
-from benchmarl.environments import Task, TaskClass
+from benchmarl.environments import Task
 from benchmarl.experiment.callback import Callback, CallbackNotifier
 from benchmarl.experiment.logger import Logger
-from benchmarl.models import GnnConfig, SequenceModelConfig
 from benchmarl.models.common import ModelConfig
-from benchmarl.utils import (
-    _add_rnn_transforms,
-    _read_yaml_config,
-    local_seed,
-    seed_everything,
-)
+from benchmarl.utils import _read_yaml_config, seed_everything
 
 _has_hydra = importlib.util.find_spec("hydra") is not None
 if _has_hydra:
@@ -68,7 +55,6 @@ class ExperimentConfig:
     share_policy_params: bool = MISSING
     prefer_continuous_actions: bool = MISSING
     collect_with_grad: bool = MISSING
-    parallel_collection: bool = MISSING
 
     gamma: float = MISSING
     lr: float = MISSING
@@ -98,16 +84,12 @@ class ExperimentConfig:
     off_policy_train_batch_size: int = MISSING
     off_policy_memory_size: int = MISSING
     off_policy_init_random_frames: int = MISSING
-    off_policy_use_prioritized_replay_buffer: bool = MISSING
-    off_policy_prb_alpha: float = MISSING
-    off_policy_prb_beta: float = MISSING
 
     evaluation: bool = MISSING
     render: bool = MISSING
     evaluation_interval: int = MISSING
     evaluation_episodes: int = MISSING
     evaluation_deterministic_actions: bool = MISSING
-    evaluation_static: bool = MISSING
 
     loggers: List[str] = MISSING
     project_name: str = MISSING
@@ -305,12 +287,7 @@ class ExperimentConfig:
         if self.keep_checkpoints_num is not None and self.keep_checkpoints_num <= 0:
             raise ValueError("keep_checkpoints_num must be greater than zero or null")
         if self.max_n_frames is None and self.max_n_iters is None:
-            raise ValueError("max_n_frames and max_n_iters are both not set")
-        if self.max_n_frames is not None and self.max_n_iters is not None:
-            warnings.warn(
-                f"max_n_frames and max_n_iters have both been set. The experiment will terminate after "
-                f"{self.get_max_n_iters(on_policy)} iterations ({self.get_max_n_frames(on_policy)} frames)."
-            )
+            raise ValueError("n_iters and total_frames are both not set")
 
 
 class Experiment(CallbackNotifier):
@@ -318,14 +295,11 @@ class Experiment(CallbackNotifier):
     Main experiment class in BenchMARL.
 
     Args:
-        task (TaskClass): the task
+        task (Task): the task configuration
         algorithm_config (AlgorithmConfig): the algorithm configuration
         model_config (ModelConfig): the policy model configuration
         seed (int): the seed for the experiment
-        config (ExperimentConfig): The experiment config. Note that some of the parameters
-            of this config may go un-consumed based on the provided algorithm or model config.
-            For example, all parameters off-policy algorithm would not be used when running
-            an experiment with an on-policy algorithm.
+        config (ExperimentConfig): the experiment config
         critic_model_config (ModelConfig, optional): the policy model configuration.
             If None, it defaults to model_config
         callbacks (list of Callback, optional): callbacks for this experiment
@@ -333,13 +307,15 @@ class Experiment(CallbackNotifier):
 
     def __init__(
         self,
-        task: Union[Task, TaskClass],
+        task: Task,
         algorithm_config: AlgorithmConfig,
         model_config: ModelConfig,
         seed: int,
         config: ExperimentConfig,
         critic_model_config: Optional[ModelConfig] = None,
         callbacks: Optional[List[Callback]] = None,
+        diff_critic_n_agents: int = None,
+        freeze_config: dict = None,
     ):
         super().__init__(
             experiment=self, callbacks=callbacks if callbacks is not None else []
@@ -347,12 +323,6 @@ class Experiment(CallbackNotifier):
 
         self.config = config
 
-        if isinstance(task, Task):
-            warnings.warn(
-                "Call `.get_task()` or `.get_from_yaml()` on your task Enum before passing it to the experiment. "
-                "If you do not do this, benchmarl will load the default task config from yaml."
-            )
-            task = task.get_task()
         self.task = task
         self.model_config = model_config
         self.critic_model_config = (
@@ -365,7 +335,7 @@ class Experiment(CallbackNotifier):
         self.algorithm_config = algorithm_config
         self.seed = seed
 
-        self._setup()
+        self._setup(diff_critic_n_agents=diff_critic_n_agents)
 
         self.total_time = 0
         self.total_frames = 0
@@ -374,49 +344,63 @@ class Experiment(CallbackNotifier):
 
         if self.config.restore_file is not None:
             self._load_experiment()
+        
+        self.valid_groups = list(self.group_map.keys())
+
+        if freeze_config:
+            """
+            freeze config shall have the following key-value pairs:
+            1. group: the group for which we want to freeze the parameters
+            2. actor_critic: which one of the actor-critic networks do we want to freeze
+            3. model_path: path where the model is stored
+            """
+            group = freeze_config.get("group", "adversary")
+            actor_critic = freeze_config.get("actor_critic", "actor")
+            model_path = freeze_config.get("model_path")
+            restore_map_location = freeze_config.get("restore_map_location")
+            assert(model_path)
+            self.freeze_network(model_path, group, actor_critic, restore_map_location)
+
+            # Determine the policy module index for the group
+            groups = list(self.group_map.keys())
+            group_index = groups.index(group)
+            policy_module = self.policy[group_index]
+
+            for param in policy_module.parameters():
+                param.requires_grad_(False)
+
+            # change the optimizers so that the paramters in the actor network are not updated
+            self.optimizers = {
+                curr_group: {
+                    loss_name: torch.optim.Adam(
+                        params, lr=self.config.lr, eps=self.config.adam_eps
+                    )
+                    for loss_name, params in self.algorithm.get_parameters(curr_group, n_agents=diff_critic_n_agents).items()
+                }
+                for curr_group in self.group_map.keys() if curr_group != group
+            }
+
+            self.valid_groups.remove(group)
 
     @property
     def on_policy(self) -> bool:
         """Whether the algorithm has to be run on policy."""
         return self.algorithm_config.on_policy()
 
-    def _setup(self):
+    def _setup(self, diff_critic_n_agents: int = None):
         self.config.validate(self.on_policy)
         seed_everything(self.seed)
-        self._perform_checks()
+        self._perfrom_checks()
         self._set_action_type()
-        self._setup_name()
         self._setup_task()
-        self._setup_algorithm()
+        self._setup_algorithm(diff_critic_n_agents=diff_critic_n_agents)
         self._setup_collector()
+        self._setup_name()
         self._setup_logger()
         self._on_setup()
 
-    def _perform_checks(self):
-        for config in (self.model_config, self.critic_model_config):
-            if isinstance(config, SequenceModelConfig):
-                for layer_config in config.model_configs[1:]:
-                    if isinstance(layer_config, GnnConfig) and (
-                        layer_config.position_key is not None
-                        or layer_config.velocity_key is not None
-                    ):
-                        raise ValueError(
-                            "GNNs reading position or velocity keys are currently only usable in first"
-                            " layer of sequence models"
-                        )
-
-        if self.algorithm_config in (MappoConfig, IppoConfig):
-            critic_model_config = self.critic_model_config
-            if isinstance(critic_model_config, SequenceModelConfig):
-                critic_model_config = self.critic_model_config.model_configs[0]
-            if (
-                isinstance(critic_model_config, GnnConfig)
-                and critic_model_config.topology == "from_pos"
-            ):
-                raise ValueError(
-                    "GNNs in PPO critics with topology 'from_pos' are currently not available, "
-                    "see https://github.com/pytorch/rl/issues/2537"
-                )
+    def _perfrom_checks(self):
+        pass
 
     def _set_action_type(self):
         if (
@@ -459,10 +443,20 @@ class Experiment(CallbackNotifier):
         transforms_training = transforms_env + [
             self.task.get_reward_sum_transform(test_env)
         ]
+
         transforms_env = Compose(*transforms_env)
         transforms_training = Compose(*transforms_training)
 
-        # Initialize test env
+        if test_env.batch_size == ():
+            self.env_func = lambda: TransformedEnv(
+                SerialEnv(self.config.n_envs_per_worker(self.on_policy), env_func),
+                transforms_training.clone(),
+            )
+        else:
+            self.env_func = lambda: TransformedEnv(
+                env_func(), transforms_training.clone()
+            )
+
         self.test_env = TransformedEnv(test_env, transforms_env.clone()).to(
             self.config.sampling_device
         )
@@ -476,30 +470,7 @@ class Experiment(CallbackNotifier):
         self.train_group_map = copy.deepcopy(self.group_map)
         self.max_steps = self.task.max_steps(self.test_env)
 
-        # Add rnn transforms here so they do not show in the benchmarl specs
-        if self.model_config.is_rnn:
-            self.test_env = _add_rnn_transforms(
-                lambda: self.test_env, self.group_map, self.model_config
-            )()
-            env_func = _add_rnn_transforms(env_func, self.group_map, self.model_config)
-
-        # Initialize train env
-        if self.test_env.batch_size == ():
-            # If the environment is not vectorized, we simulate vectorization using parallel or serial environments
-            env_class = (
-                SerialEnv if not self.config.parallel_collection else ParallelEnv
-            )
-            self.env_func = lambda: TransformedEnv(
-                env_class(self.config.n_envs_per_worker(self.on_policy), env_func),
-                transforms_training.clone(),
-            )
-        else:
-            # Otherwise it is already vectorized
-            self.env_func = lambda: TransformedEnv(
-                env_func(), transforms_training.clone()
-            )
-
-    def _setup_algorithm(self):
+    def _setup_algorithm(self, diff_critic_n_agents: int = None):
         self.algorithm = self.algorithm_config.get_algorithm(experiment=self)
 
         self.test_env = self.algorithm.process_env_fun(lambda: self.test_env)()
@@ -508,12 +479,12 @@ class Experiment(CallbackNotifier):
         self.replay_buffers = {
             group: self.algorithm.get_replay_buffer(
                 group=group,
-                transforms=self.task.get_replay_buffer_transforms(self.test_env, group),
+                transforms=self.task.get_replay_buffer_transforms(self.test_env),
             )
             for group in self.group_map.keys()
         }
         self.losses = {
-            group: self.algorithm.get_loss_and_updater(group)[0]
+            group: self.algorithm.get_loss_and_updater(group, n_agents=diff_critic_n_agents)[0]
             for group in self.group_map.keys()
         }
         self.target_updaters = {
@@ -525,7 +496,7 @@ class Experiment(CallbackNotifier):
                 loss_name: torch.optim.Adam(
                     params, lr=self.config.lr, eps=self.config.adam_eps
                 )
-                for loss_name, params in self.algorithm.get_parameters(group).items()
+                for loss_name, params in self.algorithm.get_parameters(group, n_agents=diff_critic_n_agents).items()
             }
             for group in self.group_map.keys()
         }
@@ -544,7 +515,7 @@ class Experiment(CallbackNotifier):
                 self.env_func,
                 self.policy,
                 device=self.config.sampling_device,
-                storing_device=self.config.sampling_device,
+                storing_device=self.config.train_device,
                 frames_per_batch=self.config.collected_frames_per_batch(self.on_policy),
                 total_frames=self.config.get_max_n_frames(self.on_policy),
                 init_random_frames=(
@@ -563,9 +534,6 @@ class Experiment(CallbackNotifier):
     def _setup_name(self):
         self.algorithm_name = self.algorithm_config.associated_class().__name__.lower()
         self.model_name = self.model_config.associated_class().__name__.lower()
-        self.critic_model_name = (
-            self.critic_model_config.associated_class().__name__.lower()
-        )
         self.environment_name = self.task.env_name().lower()
         self.task_name = self.task.name.lower()
         self._checkpointed_files = deque([])
@@ -598,16 +566,12 @@ class Experiment(CallbackNotifier):
             self.name = Path(self.config.restore_file).parent.parent.resolve().name
             self.folder_name = save_folder / self.name
 
-        self.folder_name.mkdir(parents=False, exist_ok=True)
-        with open(self.folder_name / "config.pkl", "wb") as f:
-            pickle.dump(self.task, f)
-            pickle.dump(self.task.config if self.task.config is not None else {}, f)
-            pickle.dump(self.algorithm_config, f)
-            pickle.dump(self.model_config, f)
-            pickle.dump(self.seed, f)
-            pickle.dump(self.config, f)
-            pickle.dump(self.critic_model_config, f)
-            pickle.dump(self.callbacks, f)
+        if (
+            len(self.config.loggers)
+            or self.config.checkpoint_interval > 0
+            or self.config.create_json
+        ):
+            self.folder_name.mkdir(parents=False, exist_ok=True)
 
     def _setup_logger(self):
         self.logger = Logger(
@@ -623,11 +587,9 @@ class Experiment(CallbackNotifier):
             seed=self.seed,
         )
         self.logger.log_hparams(
-            critic_model_name=self.critic_model_name,
             experiment_config=self.config.__dict__,
             algorithm_config=self.algorithm_config.__dict__,
             model_config=self.model_config.__dict__,
-            critic_model_config=self.critic_model_config.__dict__,
             task_config=self.task.config,
             continuous_actions=self.continuous_actions,
             on_policy=self.on_policy,
@@ -636,7 +598,6 @@ class Experiment(CallbackNotifier):
     def run(self):
         """Run the experiment until completion."""
         try:
-            seed_everything(self.seed)
             torch.cuda.empty_cache()
             self._collection_loop()
         except KeyboardInterrupt as interrupt:
@@ -650,7 +611,6 @@ class Experiment(CallbackNotifier):
 
     def evaluate(self):
         """Run just the evaluation loop once."""
-        seed_everything(self.seed)
         self._evaluation_loop()
         self.logger.commit()
         print(
@@ -713,14 +673,13 @@ class Experiment(CallbackNotifier):
 
             # Loop over groups
             training_start = time.time()
-            for group in self.train_group_map.keys():
+            # for group in self.train_group_map.keys():
+            for group in self.valid_groups:
                 group_batch = batch.exclude(*self._get_excluded_keys(group))
                 group_batch = self.algorithm.process_batch(group, group_batch)
                 if not self.algorithm.has_rnn:
                     group_batch = group_batch.reshape(-1)
-
-                group_buffer = self.replay_buffers[group]
-                group_buffer.extend(group_batch.to(group_buffer.storage.device))
+                self.replay_buffers[group].extend(group_batch)
 
                 training_tds = []
                 for _ in range(self.config.n_optimizer_steps(self.on_policy)):
@@ -802,10 +761,6 @@ class Experiment(CallbackNotifier):
         self.test_env.close()
         self.logger.finish()
 
-        for buffer in self.replay_buffers.values():
-            if hasattr(buffer.storage, "scratch_dir"):
-                shutil.rmtree(buffer.storage.scratch_dir, ignore_errors=False)
-
     def _get_excluded_keys(self, group: str):
         excluded_keys = []
         for other_group in self.group_map.keys():
@@ -867,18 +822,8 @@ class Experiment(CallbackNotifier):
 
         return float(total_norm)
 
-    @local_seed()
     @torch.no_grad()
     def _evaluation_loop(self):
-        if self.config.evaluation_static:
-            seed_everything(self.seed)
-            try:
-                self.test_env.set_seed(self.seed)
-            except NotImplementedError:
-                warnings.warn(
-                    "`experiment.evaluation_static` set to true but the environment does not allow to set seeds."
-                    "Static evaluation is not guaranteed."
-                )
         evaluation_start = time.time()
         with set_exploration_type(
             ExplorationType.DETERMINISTIC
@@ -932,6 +877,66 @@ class Experiment(CallbackNotifier):
         # Callback
         self._on_evaluation_end(rollouts)
 
+    @torch.no_grad()
+    def _evaluation_loop_all_videos(self):
+        evaluation_start = time.time()
+        with set_exploration_type(
+            ExplorationType.DETERMINISTIC
+            if self.config.evaluation_deterministic_actions
+            else ExplorationType.RANDOM
+        ):
+            if self.task.has_render(self.test_env) and self.config.render:
+                video_frames = []
+                video_frames_all = [[] for eval_episode in range(self.config.evaluation_episodes)]  # list of empty lists
+
+                def callback(env, td):
+                    video_frames.append(
+                        self.task.__class__.render_callback_index(self, env, td, 0)
+                    )
+                    for eval_episode in range(self.config.evaluation_episodes):
+                        video_frames_all[eval_episode].append(
+                            self.task.__class__.render_callback_index(self, env, td, eval_episode)
+                        )
+
+            else:
+                video_frames = None
+                callback = None
+
+            if self.test_env.batch_size == ():
+                rollouts = []
+                for eval_episode in range(self.config.evaluation_episodes):
+                    rollouts.append(
+                        self.test_env.rollout(
+                            max_steps=self.max_steps,
+                            policy=self.policy,
+                            callback=callback if eval_episode == 0 else None,
+                            auto_cast_to_device=True,
+                            break_when_any_done=True,
+                        )
+                    )
+            else:
+                rollouts = self.test_env.rollout(
+                    max_steps=self.max_steps,
+                    policy=self.policy,
+                    callback=callback,
+                    auto_cast_to_device=True,
+                    break_when_any_done=False,
+                    # We are running vectorized evaluation we do not want it to stop when just one env is done
+                )
+                rollouts = list(rollouts.unbind(0))
+        evaluation_time = time.time() - evaluation_start
+        self.logger.log(
+            {"timers/evaluation_time": evaluation_time}, step=self.n_iters_performed
+        )
+        self.logger.log_evaluation_all_videos(
+            rollouts,
+            video_frames_all=video_frames_all,
+            step=self.n_iters_performed,
+            total_frames=self.total_frames,
+        )
+        # Callback
+        self._on_evaluation_end(rollouts)
+
     # Saving experiment state
     def state_dict(self) -> OrderedDict:
         """Get the state_dict for the experiment."""
@@ -973,6 +978,21 @@ class Experiment(CallbackNotifier):
         self.n_iters_performed = state_dict["state"]["n_iters_performed"]
         self.mean_return = state_dict["state"]["mean_return"]
 
+    def load_actor_networks(self, state_dict: Dict):
+        actor_prefix = "actor_network_params."
+
+        adversary_network = state_dict["loss_adversary"]
+        adversary_actor_network = {key.split(actor_prefix)[1]: value for key, value in adversary_network.items() if actor_prefix in key}
+        adversary_actor_network.pop("__batch_size")
+        adversary_actor_network.pop("__device")
+        self.policy[0].load_state_dict(adversary_actor_network)
+
+        agent_network = state_dict["loss_agent"]
+        agent_actor_network = {key.split(actor_prefix)[1]: value for key, value in agent_network.items() if actor_prefix in key}
+        agent_actor_network.pop("__batch_size")
+        agent_actor_network.pop("__device")
+        self.policy[1].load_state_dict(agent_actor_network)
+
     def _save_experiment(self) -> None:
         """Checkpoint trainer"""
         if self.config.keep_checkpoints_num is not None:
@@ -991,48 +1011,21 @@ class Experiment(CallbackNotifier):
         loaded_dict: OrderedDict = torch.load(
             self.config.restore_file, map_location=self.config.restore_map_location
         )
-        self.load_state_dict(loaded_dict)
+        self.load_state_dict(loaded_dict) # loads the critic network as well
+        # self.load_actor_networks(loaded_dict) # only loads the actor network
+        print(f"self.config.restore_map_location: {self.config.restore_map_location}")
         return self
-
-    @staticmethod
-    def reload_from_file(restore_file: str) -> Experiment:
-        """
-        Restores the experiment from the checkpoint file.
-
-        This method expects the same folder structure created when an experiment is run.
-        The checkpoint file (``restore_file``) is in the checkpoints directory and a config.pkl file is
-        present a level above at restore_file/../../config.pkl
-
-        Args:
-            restore_file (str): The checkpoint file (.pt) of the experiment reload.
-
-        Returns:
-            The reloaded experiment.
-
-        """
-        experiment_folder = Path(restore_file).parent.parent.resolve()
-        config_file = experiment_folder / "config.pkl"
-        if not os.path.exists(config_file):
-            raise ValueError("config.pkl file not found in experiment folder.")
-        with open(config_file, "rb") as f:
-            task = pickle.load(f)
-            task_config = pickle.load(f)
-            algorithm_config = pickle.load(f)
-            model_config = pickle.load(f)
-            seed = pickle.load(f)
-            experiment_config = pickle.load(f)
-            critic_model_config = pickle.load(f)
-            callbacks = pickle.load(f)
-        task.config = task_config
-        experiment_config.restore_file = restore_file
-        experiment = Experiment(
-            task=task,
-            algorithm_config=algorithm_config,
-            model_config=model_config,
-            seed=seed,
-            config=experiment_config,
-            callbacks=callbacks,
-            critic_model_config=critic_model_config,
+    
+    def freeze_network(self, model_path, group, actor_critic, restore_map_location):
+        state_dict = torch.load(
+            model_path, restore_map_location
         )
-        print(f"\nReloaded experiment {experiment.name} from {restore_file}.")
-        return experiment
+        prefix = f"{actor_critic}_network_params."
+        network = state_dict[f"loss_{group}"]
+        network = {key.split(prefix)[1]: value for key, value in network.items() if prefix in key}
+        network.pop("__batch_size")
+        network.pop("__device")
+        if group == "adversary":
+            self.policy[0].load_state_dict(network)
+        else:
+            self.policy[1].load_state_dict(network)

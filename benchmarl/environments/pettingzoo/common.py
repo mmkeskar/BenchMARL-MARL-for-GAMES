@@ -4,18 +4,30 @@
 #  LICENSE file in the root directory of this source tree.
 #
 
-import copy
 from typing import Callable, Dict, List, Optional
 
 from torchrl.data import Composite
 from torchrl.envs import EnvBase, PettingZooEnv
 
-from benchmarl.environments.common import Task, TaskClass
+from benchmarl.environments.common import Task
 
 from benchmarl.utils import DEVICE_TYPING
 
 
-class PettingZooClass(TaskClass):
+class PettingZooTask(Task):
+    """Enum for PettingZoo tasks."""
+
+    MULTIWALKER = None
+    WATERWORLD = None
+    SIMPLE_ADVERSARY = None
+    SIMPLE_CRYPTO = None
+    SIMPLE_PUSH = None
+    SIMPLE_REFERENCE = None
+    SIMPLE_SPEAKER_LISTENER = None
+    SIMPLE_SPREAD = None
+    SIMPLE_TAG = None
+    SIMPLE_WORLD_COMM = None
+
     def get_env_fun(
         self,
         num_envs: int,
@@ -23,9 +35,9 @@ class PettingZooClass(TaskClass):
         seed: Optional[int],
         device: DEVICE_TYPING,
     ) -> Callable[[], EnvBase]:
-        config = copy.deepcopy(self.config)
         if self.supports_continuous_actions() and self.supports_discrete_actions():
-            config.update({"continuous_actions": continuous_actions})
+            self.config.update({"continuous_actions": continuous_actions})
+
         return lambda: PettingZooEnv(
             categorical_actions=True,
             device=device,
@@ -33,52 +45,52 @@ class PettingZooClass(TaskClass):
             parallel=True,
             return_state=self.has_state(),
             render_mode="rgb_array",
-            **config
+            **self.config
         )
 
     def supports_continuous_actions(self) -> bool:
-        if self.name in {
-            "MULTIWALKER",
-            "WATERWORLD",
-            "SIMPLE_TAG",
-            "SIMPLE_ADVERSARY",
-            "SIMPLE_CRYPTO",
-            "SIMPLE_PUSH",
-            "SIMPLE_REFERENCE",
-            "SIMPLE_SPEAKER_LISTENER",
-            "SIMPLE_SPREAD",
-            "SIMPLE_TAG",
-            "SIMPLE_WORLD_COMM",
+        if self in {
+            PettingZooTask.MULTIWALKER,
+            PettingZooTask.WATERWORLD,
+            PettingZooTask.SIMPLE_TAG,
+            PettingZooTask.SIMPLE_ADVERSARY,
+            PettingZooTask.SIMPLE_CRYPTO,
+            PettingZooTask.SIMPLE_PUSH,
+            PettingZooTask.SIMPLE_REFERENCE,
+            PettingZooTask.SIMPLE_SPEAKER_LISTENER,
+            PettingZooTask.SIMPLE_SPREAD,
+            PettingZooTask.SIMPLE_TAG,
+            PettingZooTask.SIMPLE_WORLD_COMM,
         }:
             return True
         return False
 
     def supports_discrete_actions(self) -> bool:
-        if self.name in {
-            "SIMPLE_TAG",
-            "SIMPLE_ADVERSARY",
-            "SIMPLE_CRYPTO",
-            "SIMPLE_PUSH",
-            "SIMPLE_REFERENCE",
-            "SIMPLE_SPEAKER_LISTENER",
-            "SIMPLE_SPREAD",
-            "SIMPLE_TAG",
-            "SIMPLE_WORLD_COMM",
+        if self in {
+            PettingZooTask.SIMPLE_TAG,
+            PettingZooTask.SIMPLE_ADVERSARY,
+            PettingZooTask.SIMPLE_CRYPTO,
+            PettingZooTask.SIMPLE_PUSH,
+            PettingZooTask.SIMPLE_REFERENCE,
+            PettingZooTask.SIMPLE_SPEAKER_LISTENER,
+            PettingZooTask.SIMPLE_SPREAD,
+            PettingZooTask.SIMPLE_TAG,
+            PettingZooTask.SIMPLE_WORLD_COMM,
         }:
             return True
         return False
 
     def has_state(self) -> bool:
-        if self.name in {
-            "SIMPLE_TAG",
-            "SIMPLE_ADVERSARY",
-            "SIMPLE_CRYPTO",
-            "SIMPLE_PUSH",
-            "SIMPLE_REFERENCE",
-            "SIMPLE_SPEAKER_LISTENER",
-            "SIMPLE_SPREAD",
-            "SIMPLE_TAG",
-            "SIMPLE_WORLD_COMM",
+        if self in {
+            PettingZooTask.SIMPLE_TAG,
+            PettingZooTask.SIMPLE_ADVERSARY,
+            PettingZooTask.SIMPLE_CRYPTO,
+            PettingZooTask.SIMPLE_PUSH,
+            PettingZooTask.SIMPLE_REFERENCE,
+            PettingZooTask.SIMPLE_SPEAKER_LISTENER,
+            PettingZooTask.SIMPLE_SPREAD,
+            PettingZooTask.SIMPLE_TAG,
+            PettingZooTask.SIMPLE_WORLD_COMM,
         }:
             return True
         return False
@@ -140,22 +152,3 @@ class PettingZooClass(TaskClass):
     @staticmethod
     def env_name() -> str:
         return "pettingzoo"
-
-
-class PettingZooTask(Task):
-    """Enum for PettingZoo tasks."""
-
-    MULTIWALKER = None
-    WATERWORLD = None
-    SIMPLE_ADVERSARY = None
-    SIMPLE_CRYPTO = None
-    SIMPLE_PUSH = None
-    SIMPLE_REFERENCE = None
-    SIMPLE_SPEAKER_LISTENER = None
-    SIMPLE_SPREAD = None
-    SIMPLE_TAG = None
-    SIMPLE_WORLD_COMM = None
-
-    @staticmethod
-    def associated_class():
-        return PettingZooClass

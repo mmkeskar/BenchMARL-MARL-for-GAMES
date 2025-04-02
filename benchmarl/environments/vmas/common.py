@@ -10,11 +10,46 @@ from torchrl.data import Composite
 from torchrl.envs import EnvBase
 from torchrl.envs.libs.vmas import VmasEnv
 
-from benchmarl.environments.common import Task, TaskClass
+from benchmarl.environments.common import Task
 from benchmarl.utils import DEVICE_TYPING
+from .navigation_pos import NavigationScenario as navigation_pos_scenario
+from .simple_tag_pos import SimpleTagScenario as simple_tag_pos_scenario
+from .navigation_pos import observation
 
 
-class VmasClass(TaskClass):
+class VmasTask(Task):
+    """Enum for VMAS tasks."""
+
+    BALANCE = None
+    SAMPLING = None
+    NAVIGATION = None
+    TRANSPORT = None
+    REVERSE_TRANSPORT = None
+    WHEEL = None
+    DISPERSION = None
+    MULTI_GIVE_WAY = None
+    DROPOUT = None
+    GIVE_WAY = None
+    WIND_FLOCKING = None
+    PASSAGE = None
+    JOINT_PASSAGE = None
+    JOINT_PASSAGE_SIZE = None
+    BALL_PASSAGE = None
+    BALL_TRAJECTORY = None
+    BUZZ_WIRE = None
+    FLOCKING = None
+    DISCOVERY = None
+    SIMPLE_ADVERSARY = None
+    SIMPLE_CRYPTO = None
+    SIMPLE_PUSH = None
+    SIMPLE_REFERENCE = None
+    SIMPLE_SPEAKER_LISTENER = None
+    SIMPLE_SPREAD = None
+    SIMPLE_TAG = None
+    SIMPLE_WORLD_COMM = None
+    NAVIGATION_POS = None
+    SIMPLE_TAG_POS = None
+
     def get_env_fun(
         self,
         num_envs: int,
@@ -23,8 +58,14 @@ class VmasClass(TaskClass):
         device: DEVICE_TYPING,
     ) -> Callable[[], EnvBase]:
         config = copy.deepcopy(self.config)
+        if self is VmasTask.NAVIGATION_POS:
+            scenario = navigation_pos_scenario()
+        elif self is VmasTask.SIMPLE_TAG_POS:
+            scenario = simple_tag_pos_scenario()
+        else:
+            scenario = self.name.lower()
         return lambda: VmasEnv(
-            scenario=self.name.lower(),
+            scenario=scenario,
             num_envs=num_envs,
             continuous_actions=continuous_actions,
             seed=seed,
@@ -58,14 +99,14 @@ class VmasClass(TaskClass):
         return None
 
     def observation_spec(self, env: EnvBase) -> Composite:
-        observation_spec = env.full_observation_spec_unbatched.clone()
+        observation_spec = env.unbatched_observation_spec.clone()
         for group in self.group_map(env):
             if "info" in observation_spec[group]:
                 del observation_spec[(group, "info")]
         return observation_spec
 
     def info_spec(self, env: EnvBase) -> Optional[Composite]:
-        info_spec = env.full_observation_spec_unbatched.clone()
+        info_spec = env.unbatched_observation_spec.clone()
         for group in self.group_map(env):
             del info_spec[(group, "observation")]
         for group in self.group_map(env):
@@ -75,45 +116,8 @@ class VmasClass(TaskClass):
             return None
 
     def action_spec(self, env: EnvBase) -> Composite:
-        return env.full_action_spec_unbatched
+        return env.unbatched_action_spec
 
     @staticmethod
     def env_name() -> str:
         return "vmas"
-
-
-class VmasTask(Task):
-    """Enum for VMAS tasks."""
-
-    BALANCE = None
-    SAMPLING = None
-    NAVIGATION = None
-    TRANSPORT = None
-    REVERSE_TRANSPORT = None
-    WHEEL = None
-    DISPERSION = None
-    MULTI_GIVE_WAY = None
-    DROPOUT = None
-    GIVE_WAY = None
-    WIND_FLOCKING = None
-    PASSAGE = None
-    JOINT_PASSAGE = None
-    JOINT_PASSAGE_SIZE = None
-    BALL_PASSAGE = None
-    BALL_TRAJECTORY = None
-    BUZZ_WIRE = None
-    FLOCKING = None
-    DISCOVERY = None
-    FOOTBALL = None
-    SIMPLE_ADVERSARY = None
-    SIMPLE_CRYPTO = None
-    SIMPLE_PUSH = None
-    SIMPLE_REFERENCE = None
-    SIMPLE_SPEAKER_LISTENER = None
-    SIMPLE_SPREAD = None
-    SIMPLE_TAG = None
-    SIMPLE_WORLD_COMM = None
-
-    @staticmethod
-    def associated_class():
-        return VmasClass

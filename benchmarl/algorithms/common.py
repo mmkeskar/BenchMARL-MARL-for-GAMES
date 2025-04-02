@@ -5,7 +5,6 @@
 #
 
 import pathlib
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type
@@ -14,18 +13,21 @@ from tensordict import TensorDictBase
 from tensordict.nn import TensorDictModule, TensorDictSequential
 from torchrl.data import (
     Categorical,
-    LazyMemmapStorage,
+    Composite,
     LazyTensorStorage,
     OneHot,
     ReplayBuffer,
     TensorDictReplayBuffer,
 )
-from torchrl.data.replay_buffers import (
-    PrioritizedSampler,
-    RandomSampler,
-    SamplerWithoutReplacement,
+from torchrl.data.replay_buffers import RandomSampler, SamplerWithoutReplacement
+from torchrl.envs import (
+    Compose,
+    EnvBase,
+    InitTracker,
+    TensorDictPrimer,
+    Transform,
+    TransformedEnv,
 )
-from torchrl.envs import Compose, EnvBase, Transform
 from torchrl.objectives import LossModule
 from torchrl.objectives.utils import HardUpdate, SoftUpdate, TargetNetUpdater
 
@@ -107,7 +109,7 @@ class Algorithm(ABC):
                     "you can apply a transform to your environment to satisfy this criteria."
                 )
 
-    def get_loss_and_updater(self, group: str) -> Tuple[LossModule, TargetNetUpdater]:
+    def get_loss_and_updater(self, group: str, n_agents: int = None) -> Tuple[LossModule, TargetNetUpdater]:
         """
         Get the LossModule and TargetNetUpdater for a specific group.
         This function calls the abstract :class:`~benchmarl.algorithms.Algorithm._get_loss()` which needs to be implemented.
@@ -125,6 +127,7 @@ class Algorithm(ABC):
                 group=group,
                 policy_for_loss=self.get_policy_for_loss(group),
                 continuous=continuous,
+                n_agents=n_agents,
             )
             if use_target:
                 if self.experiment_config.soft_target_update:
@@ -164,33 +167,12 @@ class Algorithm(ABC):
             memory_size = -(-memory_size // sequence_length)
             sampling_size = -(-sampling_size // sequence_length)
 
-        # Sampler
-        if self.on_policy:
-            sampler = SamplerWithoutReplacement()
-        elif self.experiment_config.off_policy_use_prioritized_replay_buffer:
-            sampler = PrioritizedSampler(
-                memory_size,
-                self.experiment_config.off_policy_prb_alpha,
-                self.experiment_config.off_policy_prb_beta,
-            )
-        else:
-            sampler = RandomSampler()
-
-        # Storage
-        if self.buffer_device == "disk" and not self.on_policy:
-            storage = LazyMemmapStorage(
-                memory_size,
-                device=self.device,
-                scratch_dir=self.experiment.folder_name / f"buffer_{group}",
-            )
-        else:
-            storage = LazyTensorStorage(
+        sampler = SamplerWithoutReplacement() if self.on_policy else RandomSampler()
+        return TensorDictReplayBuffer(
+            storage=LazyTensorStorage(
                 memory_size,
                 device=self.device if self.on_policy else self.buffer_device,
-            )
-
-        return TensorDictReplayBuffer(
-            storage=storage,
+            ),
             sampler=sampler,
             batch_size=sampling_size,
             priority_key=(group, "td_error"),
@@ -245,7 +227,7 @@ class Algorithm(ABC):
             policies.append(self._policies_for_collection[group])
         return TensorDictSequential(*policies)
 
-    def get_parameters(self, group: str) -> Dict[str, Iterable]:
+    def get_parameters(self, group: str, n_agents: int = None) -> Dict[str, Iterable]:
         """
         Get the dictionary mapping loss names to the relative parameters to optimize for a given group.
         This function calls the abstract :class:`~benchmarl.algorithms.Algorithm._get_parameters()` which needs to be implemented.
@@ -254,7 +236,7 @@ class Algorithm(ABC):
         """
         return self._get_parameters(
             group=group,
-            loss=self.get_loss_and_updater(group)[0],
+            loss=self.get_loss_and_updater(group, n_agents=n_agents)[0],
         )
 
     def process_env_fun(
@@ -270,6 +252,38 @@ class Algorithm(ABC):
         Returns: a function that takes no args and creates an enviornment
 
         """
+        if self.has_rnn:
+
+            def model_fun():
+                env = env_fun()
+
+                spec_actor = self.model_config.get_model_state_spec()
+                spec_actor = Composite(
+                    {
+                        group: Composite(
+                            spec_actor.expand(len(agents), *spec_actor.shape),
+                            shape=(len(agents),),
+                        )
+                        for group, agents in self.group_map.items()
+                    }
+                )
+
+                env = TransformedEnv(
+                    env,
+                    Compose(
+                        *(
+                            [InitTracker(init_key="is_init")]
+                            + (
+                                [TensorDictPrimer(spec_actor, reset_key="_reset")]
+                                if len(spec_actor.keys(True, True)) > 0
+                                else []
+                            )
+                        )
+                    ),
+                )
+                return env
+
+            return model_fun
 
         return env_fun
 

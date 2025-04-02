@@ -7,7 +7,6 @@
 import json
 import os
 import warnings
-from collections.abc import MutableMapping, Sequence
 from pathlib import Path
 
 from typing import Dict, List, Optional
@@ -18,8 +17,6 @@ import torchrl
 
 from tensordict import TensorDictBase
 from torch import Tensor
-
-from torchrl.record import TensorboardLogger
 from torchrl.record.loggers import get_logger
 from torchrl.record.loggers.wandb import WandbLogger
 
@@ -76,41 +73,17 @@ class Logger:
             )
 
     def log_hparams(self, **kwargs):
-        kwargs.update(
-            {
-                "algorithm_name": self.algorithm_name,
-                "model_name": self.model_name,
-                "task_name": self.task_name,
-                "environment_name": self.environment_name,
-                "seed": self.seed,
-            }
-        )
         for logger in self.loggers:
-            if isinstance(logger, TensorboardLogger):
-                # Tensorboard does not like nested dictionaries -> flatten them
-                def flatten(dictionary, parent_key="", separator="_"):
-                    items = []
-                    for key, value in dictionary.items():
-                        new_key = parent_key + separator + key if parent_key else key
-                        if isinstance(value, MutableMapping):
-                            items.extend(
-                                flatten(value, new_key, separator=separator).items()
-                            )
-                        elif isinstance(value, Sequence):
-                            for i, v in enumerate(value):
-                                items.append((new_key + separator + str(i), v))
-                        else:
-                            items.append((new_key, value))
-                    return dict(items)
-
-                # Convert any non-supported values
-                for key, value in kwargs.items():
-                    if not isinstance(value, (int, float, str, Tensor)):
-                        kwargs[key] = str(value)
-
-                logger.log_hparams(flatten(kwargs))
-            else:
-                logger.log_hparams(kwargs)
+            kwargs.update(
+                {
+                    "algorithm_name": self.algorithm_name,
+                    "model_name": self.model_name,
+                    "task_name": self.task_name,
+                    "environment_name": self.environment_name,
+                    "seed": self.seed,
+                }
+            )
+            logger.log_hparams(kwargs)
 
     def log_collection(
         self,
@@ -250,15 +223,88 @@ class Logger:
                 if isinstance(logger, WandbLogger):
                     logger.log_video("eval/video", vid, fps=20, commit=False)
                 else:
-                    # Other loggers cannot deal with odd video sizes so we check if the video dimensions are odd and make them even
-                    for index in (-1, -2):
-                        if vid.shape[index] % 2 != 0:
-                            vid = vid.index_select(
-                                index, torch.arange(1, vid.shape[index])
-                            )
-                    # End of check
-
                     logger.log_video("eval_video", vid, step=step)
+
+    def log_evaluation_all_videos(
+        self,
+        rollouts: List[TensorDictBase],
+        total_frames: int,
+        step: int,
+        video_frames_all: Optional[List] = None,
+    ):
+        if (
+            not len(self.loggers) and not self.experiment_config.create_json
+        ) or not len(rollouts):
+            return
+
+        # Cut rollouts at first done
+        max_length_rollout_0 = 0
+        for i in range(len(rollouts)):
+            r = rollouts[i]
+            next_done = self._get_global_done(r).squeeze(-1)
+
+            # First done index for this traj
+            done_index = next_done.nonzero(as_tuple=True)[0]
+            if done_index.numel() > 0:
+                done_index = done_index[0]
+                r = r[: done_index + 1]
+            if i == 0:
+                max_length_rollout_0 = max(r.batch_size[0], max_length_rollout_0)
+            rollouts[i] = r
+
+        to_log = {}
+        json_metrics = {}
+        for group in self.group_map.keys():
+            # returns has shape (n_episodes)
+            returns = torch.stack(
+                [self._get_reward(group, td).sum(0).mean() for td in rollouts],
+                dim=0,
+            )
+            self._log_min_mean_max(
+                to_log, f"eval/{group}/reward/episode_reward", returns
+            )
+            json_metrics[group + "_return"] = returns
+
+        mean_group_return = self._log_global_episode_reward(
+            list(json_metrics.values()), to_log, prefix="eval"
+        )
+        # mean_group_return has shape (n_episodes) as we take the mean groups
+        json_metrics["return"] = mean_group_return
+
+        to_log["eval/reward/episode_len_mean"] = sum(
+            td.batch_size[0] for td in rollouts
+        ) / len(rollouts)
+
+        if self.json_writer is not None:
+            self.json_writer.write(
+                metrics=json_metrics,
+                total_frames=total_frames,
+                evaluation_step=total_frames
+                // self.experiment_config.evaluation_interval,
+            )
+            json_file = str(self.json_writer.path)
+            for logger in self.loggers:
+                if isinstance(logger, WandbLogger):
+                    logger.experiment.save(
+                        json_file, base_path=os.path.dirname(json_file)
+                    )
+
+        self.log(to_log, step=step)
+        if video_frames_all is not None and max_length_rollout_0 > 1:
+            for video_index in range(len(video_frames_all)):
+                video_frames = np.stack(video_frames_all[video_index][: max_length_rollout_0 - 1], axis=0)
+                vid = torch.tensor(
+                    np.transpose(video_frames, (0, 3, 1, 2)),
+                    dtype=torch.uint8,
+                ).unsqueeze(0)
+                for logger in self.loggers:
+                    if isinstance(logger, WandbLogger):
+                        # EI: I haven't modified this, so it will overwrite if you're using Wandb (LET ME KNOW IF YOU NEED IT)
+                        logger.log_video("eval/video", vid, fps=20, commit=False)
+                    else:
+                        # EI: Here, I just added the "video_index" variable so the videos store separately
+                        #     logger always appends the "step" value at the end, so you can't swap the order of numbers here
+                        logger.log_video(f"eval_video_{video_index}_step", vid, step=step)
 
     def commit(self):
         for logger in self.loggers:

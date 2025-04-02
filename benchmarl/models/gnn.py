@@ -17,6 +17,9 @@ import torch
 from tensordict import TensorDictBase
 from tensordict.utils import _unravel_key_to_tuple, NestedKey
 from torch import nn, Tensor
+from torch_geometric.utils import to_networkx
+import networkx as nx
+import matplotlib.pyplot as plt
 
 from benchmarl.models.common import Model, ModelConfig
 
@@ -148,6 +151,9 @@ class Gnn(Model):
         if self.pos_features > 0:
             self.pos_features += 1  # We will add also 1-dimensional distance
         self.edge_features = self.pos_features + self.vel_features
+
+        # The input spec here contains a dictionary with the keys ('adversary', 'observation') and ('agent', 'observation')
+        # The values of this dictionary are the tensorspecs corresponding to the respective keys.
         self.input_features = sum(
             [
                 spec.shape[-1]
@@ -274,6 +280,9 @@ class Gnn(Model):
             if _unravel_key_to_tuple(in_key)[-1]
             not in (self.position_key, self.velocity_key)
         ]
+        input = [
+            dict_val.get('observation') if isinstance(dict_val, TensorDictBase) else dict_val for dict_val in input
+        ]
 
         # Retrieve position
         if self.position_key is not None:
@@ -323,6 +332,10 @@ class Gnn(Model):
             self_loops=self.self_loops,
             edge_radius=self.edge_radius,
         )
+        # G = to_networkx(graph, node_attrs=["x"])
+        # nx.draw(G, with_labels=True, node_color=[x[0] for x in graph.x.tolist()])
+        # plt.title(f"graph of {self.agent_group}")
+        # plt.show()
         forward_gnn_params = {
             "x": graph.x,
             "edge_index": graph.edge_index,
