@@ -10,7 +10,7 @@ from benchmarl.models import SequenceModelConfig, GnnConfig, MlpConfig
 def configure_experiment():
     config = ExperimentConfig.get_from_yaml()
     config.checkpoint_at_end = True
-    config.save_folder = f"./mlp_freeze_{freeze_config["group"]}/"  # setting save folder based on freeze_config
+    config.save_folder = f"./checkpoints/mlp_freeze_{freeze_config["group"]}/"  # setting save folder based on freeze_config
 
     # limit number of iterations for speed testing
     config.max_n_iters = 2  # comment out this line to do the full 500 iterations by default
